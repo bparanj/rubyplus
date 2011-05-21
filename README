@@ -13,3 +13,13 @@ check in.
 4) For moonshine to deploy, in config/deploy.rb add the line:
 
 set :local_config, %w(config/database.yml)
+
+
+
+ToDo:
+
+1) For admin, read user name and password from a config file. Refer backup gem readme.
+2) Add admin config file to .gitignore.
+3) Add the config/admin.yml to local_config array in moonshine
+4) Test admin part of the site
+5) Deploy on Linode and enjoy happy and retired life.

@@ -1,7 +1,9 @@
 <fieldset>
 <legend>Editing testimonial</legend>
 
-<%= error_messages_for :testimonial %>
+<% if @testimonial.errors.any? %>
+	<%= render :partical => "shared/error_messages", :target => @testimonial   %>
+ <% end %>
 
 <% form_for([:admin, @testimonial]) do |f| %>
 <%= render :partial => "form", :locals => { :f => f, :button_text => "Update"  }  %>

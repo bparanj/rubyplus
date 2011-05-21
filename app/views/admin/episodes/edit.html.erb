@@ -2,7 +2,9 @@
 <legend>Editing episode</legend>
 
 
-<%= error_messages_for :episode %>
+<% if @episode.errors.any? %>
+	<%= render :partical => "shared/error_messages", :target => @episode   %>
+ <% end %>
 
 <%= render :partial => "form", :locals => { :button_tag => "Update", :tags =>  @tags }  %>
 

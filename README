@@ -23,3 +23,11 @@ ToDo:
 3) Add the config/admin.yml to local_config array in moonshine
 4) Test admin part of the site
 5) Deploy on Linode and enjoy happy and retired life.
+6) scp the data files to server, import data to database
+7) Remove fields not required by creating a migration (is it updated_at field?)
+8) Use jQuery for datepicker
+9) Tag all episodes before deploying
+10) Refactor rendering error messages (shared/error_messages)
+11) Install friendly_id
+12) Remove discuss_link column - create migration
+13) Remove all episode.id.to_i

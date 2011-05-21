@@ -1,7 +1,9 @@
 <fieldset>
 <legend> Episode</legend>
 
-<%= error_messages_for :episode %>
+<% if @episode.errors.any? %>
+	<%= render :partical => "shared/error_messages", :target => @article   %>
+ <% end %>
 
  <%= render :partial => "episode"  %>
 

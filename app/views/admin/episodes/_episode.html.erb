@@ -1,13 +1,12 @@
 <div class="episode">
 	<div class="side">
 		<div class="number"><%= @episode.sequence %></div>
-		<div class="published_at"><%= @episode.published_at.to_s(:rplus) %> </div>
-		<div class="comments_count"> <%= link_to "Discuss", episode.discuss_link %></div>
+		<div class="published_at"><%= @episode.published_at.to_s(:long) %> </div>
 	</div>
 	<div class="main">
 		<h2><%= @episode.title %></h2>
 		<div class="description">
-			<%= @episode.description %>
+			<%= raw(@episode.description) %>
 		</div>
 		<div class="download">
 			<%= link_to "Download", @episode.download_link %>
@@ -15,10 +14,10 @@
 			<span class="stats"> (<%= @episode.size %> MB, <%= @episode.duration %>)</span>
 		</div>
 		<div>
-			Tags: <%= episode.tag_list.join(", ") %>
+			Tags: <%= @episode.tag_list.join(", ") %>
 		</div>
 		
-	  <%= link_to 'Show', admin_episode_path(@episode) %>
+	  <%= link_to 'Show', admin_episode_path(@episode.id.to_i) %>
 	  <%= link_to 'Edit', edit_admin_episode_path(@episode.id.to_i) %> 
 	  <%= link_to 'Destroy', :controller=>"admin/episodes", :action=>"destroy" %>
 	</div>

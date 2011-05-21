@@ -15,7 +15,4 @@ class Episode < ActiveRecord::Base
     find(:all, :order => "sequence DESC" )
   end
 
-  def to_param
-    "#{id}-#{title.gsub(/[^a-z1-9]+/i, '-')}.html"
-  end
 end

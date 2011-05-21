@@ -7,14 +7,9 @@
   <title> <%= @page_title || "Free Ruby and Rails Screencasts"  %> </title>  
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 
-  <% if @meta_description %>
-    <meta name="description" content= <%= @meta_description %> /> 
-  <%- end -%>
-
-  <%= yield :meta_keywords %>
-
   <%= stylesheet_link_tag :all, :cache => true  %>
   <%= javascript_include_tag :all, :cache => true  %>
+  <%= include_tiny_mce_if_needed %>
 
 </head>
 
@@ -23,12 +18,7 @@
 <!-- ##### Header VER 0.39 ##### -->    
 	<div id="header">
 		<div class="superHeader" id="login">
-		 <% if user_logged_in? %>
-		    <span>You are logged in as: </span>
-		 	<%= current_user.login %>
-		 <% else %>
 		    <span>Welcome Guest</span>
-		 <% end %>
 	    </div>
 	  
       <div class="midHeader">
@@ -41,17 +31,6 @@
 	  <div class="subHeader">
 		<span class="doNotDisplay">Navigation:</span>
 		<%= link_to 'Home', episodes_url   %>
-		| <%= link_to 'Services', services_url  %>	
-		| <%= link_to 'Mentoring', coaching_url  %>	
-		<% if user_logged_in? %> 
-		  | <%= link_to 'Logout', logout_url %>
-		  | <%= link_to 'Contact', new_contact_url  %>
-		<% else %>
-		 | <%= link_to 'Login', login_url  %>
-		 | <%= link_to "Signup", signup_url  %>
-		<% end %>	
-		|   <%= link_to 'Archive', archive_episodes_url  %>
-		| <%= link_to 'RSS Feed', "http://feeds.feedburner.com/rubyplus"  %>
 		
 	  </div>
 	
@@ -62,55 +41,15 @@
     	 <!-- ##### Left Sidebar ##### -->
 		
 	      <div class="leftSideBar">
-			<p class="sideBarTitle" align="center">Search</p>
-		    <div >
-		      <span class="sideBarText" align="center">
-				<% form_tag search_episodes_path, :method => :get do -%> 
-				<div align="left" id="search"> 
-				<%= text_field_tag :q, params[:q], :class => 'text' %>&nbsp;<br> 
-				<%= submit_tag 'Go', :class => 'button' %> 
-				</div> 
-				<% end -%>
-		      </span>
-		    </div>
-		
-		    <p class="sideBarTitle" align="center">Services</p>
-		    <div class="box">
-		      <span class="sideBarText" align="center">
-		       <%= link_to 'Hire Us', new_contact_url %> 
-		      </span>
-		    </div>
 
-		    <p class="sideBarTitle" align="center">Become a Member</p>
-		    <div class="box">
-		      <span class="sideBarText" align="center">
-		        <%= link_to "Sign up", signup_url  %> for free membership and get notifications for members only free Ruby and Rails screencasts.  <a href="/privacy" class="lbOn">Privacy</a>
-		     </span>
-		
-		    </div>
-		<!-- Change the announcement to Referral Program with details here... -->
-			   <!-- <p class="sideBarTitle" align="center">Announcement</p>
-			  			    <div class="box">
-			  			      <span class="sideBarText" align="center">
-			  			        I have turned off caching due to members having problems accessing the archive.
-			  			     </span>
-			  			    </div> -->
-			   <p class="sideBarTitle" align="center">Rails Meetup</p>
+			   <p class="sideBarTitle" align="center">Ruby Meetup</p>
 			    <div class="box">
 			      <span class="sideBarText" align="center">
 				     If you live in the bay area, check out 
-			         <%= link_to 'Silicon Valley Ruby Meetup', 'http://ruby.meetup.com/99' %>
+			         <%= link_to 'Silicon Valley Ruby Meetup', 'http://www.meetup.com/silicon-valley-ruby/' %>
 			     </span>
 			    </div>	
-			   <p class="sideBarTitle" align="center">Home Office</p>
-			
-				 <div class="box">
-			       <span class="sideBarText" align="center">
-				     For those who are curious, here is my 
-			         <%= link_to 'Home Office', 'http://www.rubyplus.org/images/home_office.jpg', :target => "_blank"  %>
-			       </span>
-			     </div>
-				
+							
 		  </div>
 	
     <!-- ##### Right Sidebar ##### -->
@@ -121,17 +60,7 @@
 		 <p class="sideBarTitle"  align="center">Recommend Me</p>
 		  <div class="badge" align="center"><a href="http://www.workingwithrails.com/recommendation/new/person/8567-bala-paranj"><img alt="Recommend Me" src="http://workingwithrails.com/images/tools/compact-small-button.jpg" /></a>
 		 </div>
-			
-		 <p class="sideBarTitle"  align="center"> Please Support</p>
-		  <div class="badge" align="center">
-				<a href="https://secureusa.greenpeace.org/securedonate/index.php?from=aboutusredbutton" target="_blank"><img src="http://www.greenpeace.org/international/assets/graphics/buttonrainbow120x60" border="0" alt="Greenpeace"></a>
-		 </div>
-			
-			 <p class="sideBarTitle"  align="center">Subscribe to RSS</p>
-			  <div class="badge" align="center">
-				<a href="http://feeds.feedburner.com/rubyplus" title="Subscribe to my feed" rel="alternate" type="application/rss+xml"><img src="http://www.feedburner.com/fb/images/pub/feed-icon32x32.png" alt="" style="border:0"/></a><a href="http://feeds.feedburner.com/rubyplus" title="Subscribe to my feed" rel="alternate" type="application/rss+xml"> </a>
-			 </div>
-			
+						
 			 <p class="sideBarTitle"  align="center">Bookmark this Site</p>
 			  <div class="badge" align="center">
 				<script type="text/javascript">
@@ -161,9 +90,6 @@
 
 		<%= yield :layout %>
 		
-		<div class="badge" align="center">
-		<p><a href="http://feeds.feedburner.com/rubyplus"><img src="http://feeds.feedburner.com/~fc/rubyplus?bg=33CCFF&amp;fg=444444&amp;anim=0&amp;label=listeners" height="26" width="88" style="border:0" alt="" /></a></p>
-		</div>
 			
 		<div align="center">
       		<a href="http://www.workingwithrails.com/recommendation/new/person/8567-bala-paranj">
@@ -177,8 +103,8 @@
 
     <div id="footer">
       <div class="doNotPrint">
-	            <a href="/privacy" class="lbOn">Privacy Policy</a> |
-				<a href="/sitemap.xml">Site Map</a>
+	            <a href="/privacy" class="lbOn">Privacy Policy</a> 
+
         <!-- <a href="./index.html">Tell a Friend</a> |
                 <a href="./index.html">Site Map</a> |
                 <a href="./index.html">Feedback</a> |
@@ -186,23 +112,9 @@
       </div>
 
       <div>
-        Copyright &copy; 2007 - 2008, rubyplus.org
+        Copyright &copy; 2007 - 2011, rubyplus.org
       </div>
     </div>
 
-	<script type="text/javascript">
-	var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
-	document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
-	</script>
-	<script type="text/javascript">
-	var pageTracker = _gat._getTracker("UA-358645-2");
-	pageTracker._initData();
-	pageTracker._trackPageview();
-	</script>
-	
-	
-	<script src="http://static.getclicky.com/36034.js" type="text/javascript"></script>
-	
-	<script src="http://rubyplus.uservoice.com/pages/general/widgets/tab.js?alignment=left&amp;color=00BCBA" type="text/javascript"></script>
   </body>
 </html>

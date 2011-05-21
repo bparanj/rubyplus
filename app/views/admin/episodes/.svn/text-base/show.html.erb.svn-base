@@ -1,0 +1,10 @@
+<fieldset>
+<legend> Episode</legend>
+
+<%= error_messages_for :episode %>
+
+ <%= render :partial => "episode"  %>
+
+<%= link_to 'Back', admin_episodes_path %>
+
+</fieldset>

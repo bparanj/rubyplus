@@ -1,0 +1,10 @@
+<fieldset>
+<legend>New episode</legend>
+
+<%= error_messages_for :episode %>
+
+<%= render :partial => "form", :locals => { :button_tag => "Create"  }  %>
+
+<%= link_to 'Back', admin_episodes_path %>
+
+</fieldset>

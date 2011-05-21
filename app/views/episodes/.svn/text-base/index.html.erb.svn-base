@@ -1,0 +1,37 @@
+<fieldset>
+<legend>Recent Episodes of Ruby and Rails Screencasts</legend>
+
+<% content_for :meta_keywords do %>
+    <% @kw = [] %>    
+	<% @episodes.each { |x| @kw.concat(x.tag_list) } %>
+	<%= meta_tag('keywords', @kw.uniq.join(", ")) %>
+<% end %>
+
+<!-- Ad for Referral Program goes here.... -->
+
+
+
+<% for episode in @episodes %>
+
+<div class="episode">
+	<div class="side">
+		<div class="number"><%=h episode.sequence %></div>
+		<div class="published_at"><%=h episode.published_at.to_s(:rplus) %> </div>
+		<div class="comments_count"> <%= link_to "Discuss", episode.discuss_link %></div>
+	</div>
+	<div class="main">
+		<h2><%= link_to episode.title, episode_url(episode) %></h2>
+		<div class="description">
+			<%= episode.description %>
+		</div>
+		<div class="download">
+			<%= link_to "Download", download_episode_url(episode.id.to_i) %>
+			<span class="stats"> (<%=h episode.size %> MB, <%=h episode.duration %>)</span>
+		</div>
+		
+	</div>
+
+</div>
+<% end %>
+
+</fieldset>

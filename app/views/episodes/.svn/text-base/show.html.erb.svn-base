@@ -1,0 +1,34 @@
+<% content_for :meta_keywords do %>
+	<%= meta_tag('keywords', @episode.tag_list) %>
+<% end %>
+
+<% @page_title = @episode.title %>
+
+<fieldset>
+<legend> </legend>
+
+<div class="episode">
+	<div class="side">
+		<div class="number"><%= @episode.sequence %></div>
+		<div class="published_at"><%= @episode.published_at.to_s(:rplus)%>   </div>
+		<div class="comments_count"> <%= link_to "Discuss", @episode.discuss_link %></div>
+	</div>
+	<div class="main">
+		<h2><%=h @episode.title %></h2>
+		<div class="description">
+			<%= @episode.description %>
+		</div>
+		
+		<% if user_logged_in? %> 
+		  <div class="download">
+			<%= link_to "Download", download_episode_url(@episode.id.to_i) %>
+			<span class="stats"> (<%=h @episode.size %> MB, <%=h @episode.duration %>)</span>
+		  </div>
+		<% else %>
+		    <%= link_to "Signup", signup_url %> now to download the episode for free.
+		<% end %>
+	</div>
+
+</div>
+
+</fieldset>

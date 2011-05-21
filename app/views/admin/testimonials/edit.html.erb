@@ -1,0 +1,13 @@
+<fieldset>
+<legend>Editing testimonial</legend>
+
+<%= error_messages_for :testimonial %>
+
+<% form_for([:admin, @testimonial]) do |f| %>
+<%= render :partial => "form", :locals => { :f => f, :button_text => "Update"  }  %>
+<% end %>
+
+</fieldset>
+
+<%= link_to 'Show', @testimonial %> |
+<%= link_to 'Back', testimonials_path %>

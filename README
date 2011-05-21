@@ -4,3 +4,12 @@
 	mysql -p --user=username < guestdb.txt
 	
 	Add : use database_name to the .txt file 
+	
+3) Add config/database.yml to .gitignore in the root of the project
+
+Delete database.yml file if you had checked in or rename it to something else before
+check in.
+
+4) For moonshine to deploy, in config/deploy.rb add the line:
+
+set :local_config, %w(config/database.yml)

@@ -1,0 +1,23 @@
+<html xmlns="http://www.w3.org/1999/xhtml" 
+version="-//W3C//DTD XHTML 1.1//EN" xml:lang="en"> 
+<head> 
+<title>Custom Maintenance Page</title> 
+<meta http-equiv="Content-type" content="text/html; charset=utf-8" /> 
+<link href="/stylesheets/maintenance.css" rel="stylesheet" type="text/css" /> 
+</head> 
+<body> 
+<div id="content"> 
+<img src="http://railsrecipes.com/images/fr_arr.jpg" 
+alt="Recipes" /> 
+<h1> 
+We're currently offline for <%= reason ? reason : "maintenance" %> 
+as of <%= Time.now.strftime("%I:%M %p %Z") %>. 
+</h1> 
+<p> 
+Sorry for the inconvenience. We'll be back 
+<%= deadline ? "by #{deadline}" : "shortly" %>. 
+Refer a job opening and make $1200 <a href="http://www.zepho.com/referral.html">Referral Bonus</a>.  
+</p> 
+</div> 
+</body> 
+</html> 

@@ -1,0 +1,25 @@
+<% @page_title = @episode.title %>
+
+<fieldset>
+<legend> </legend>
+
+<div class="episode">
+	<div class="side">
+		<div class="number"><%= @episode.sequence %></div>
+		<div class="published_at"><%= @episode.published_at%>   </div>	
+	</div>
+	<div class="main">
+		<h2><%=h @episode.title %></h2>
+		<div class="description">
+			<%= @episode.description %>
+		</div>
+		
+		  <div class="download">
+			<%= link_to "Download", download_episode_url(@episode.id.to_i) %>
+			<span class="stats"> (<%=h @episode.size %> MB, <%=h @episode.duration %>)</span>
+		  </div>
+	</div>
+
+</div>
+
+</fieldset>

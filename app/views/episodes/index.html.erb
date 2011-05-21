@@ -1,0 +1,26 @@
+<fieldset>
+<legend>Recent Episodes of Ruby and Rails Screencasts</legend>
+
+<% for episode in @episodes %>
+
+<div class="episode">
+	<div class="side">
+		<div class="number"><%= episode.sequence %></div>
+		<div class="published_at"><%= episode.published_at %> </div>
+	</div>
+	<div class="main">
+		<h2><%= link_to episode.title, episode_url(episode.id) %></h2>
+		<div class="description">
+			<%= raw(episode.description) %>
+		</div>
+		<div class="download">
+			<%= link_to "Download", download_episode_url(episode.id.to_i) %>
+			<span class="stats"> (<%=h episode.size %> MB, <%=h episode.duration %>)</span>
+		</div>
+		
+	</div>
+
+</div>
+<% end %>
+
+</fieldset>

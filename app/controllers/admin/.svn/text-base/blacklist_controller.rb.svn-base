@@ -1,0 +1,20 @@
+class Admin::BlacklistController < AdminController
+  before_filter :authenticate
+
+  def index
+    @domains = BlacklistDomain.find(:all)
+    @emailids = BlacklistEmailid.find(:all)
+  end
+
+  def add_domain
+    domain = BlacklistDomain.create!(:name => params[:new_domain] )
+
+    render :text =>  "<li>" + params[:new_domain] + "</li>"
+  end
+
+  def add_email
+    email = BlacklistEmailid.create!(:name => params[:new_email] )
+
+    render :text =>  "<li>" + params[:new_email] + "</li>"
+  end
+end

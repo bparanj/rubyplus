@@ -1,0 +1,13 @@
+<fieldset>
+<legend>Search results for '<%= h params[:q] %>'</legend> 
+<% unless @episodes.empty? -%> 
+<ul> 
+<% for episode in @episodes -%> 
+<li><%= link_to "#{episode.title}", episode %></li> 
+<% end -%> 
+</ul> 
+<%= will_paginate @search %> 
+<% else -%> 
+<p>No episodes were found!</p> 
+<% end -%>
+</fieldset>

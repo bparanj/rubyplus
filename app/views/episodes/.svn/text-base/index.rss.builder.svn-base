@@ -1,0 +1,19 @@
+xml.instruct! :xml, :version=>"1.0" 
+xml.rss(:version=>"2.0"){
+  xml.channel{
+    xml.title("Free Ruby and Rails Screencasts")
+    xml.link formatted_episodes_url(:rss)
+    xml.description("Ruby on Rails and Ruby Screencasts. Download for free.")
+    xml.language('en-us')
+
+    for episode	in @episodes
+      xml.item do
+        xml.title(episode.sequence.to_s + ". " + episode.title)
+        xml.description(episode.description)
+        xml.pubDate(episode.created_at.to_s(:rfc822))
+        xml.link episode_url(episode.id.to_s)
+        xml.guid episode_url(episode.id.to_s)
+      end
+    end
+  }
+}

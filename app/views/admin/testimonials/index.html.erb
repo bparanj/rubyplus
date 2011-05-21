@@ -1,0 +1,21 @@
+<fieldset>
+<legend>Testimonials</legend>
+
+<table>
+
+<% for testimonial in @testimonials %>
+  <tr>
+    <th><%= testimonial.title %> </th>
+  </tr>
+
+  <tr>
+    <td><%= testimonial.body %></td>
+  </tr>
+<% end %>
+</table>
+
+<br />
+
+</fieldset>
+
+<%= link_to "New Testimonial", new_admin_testimonial_url %>

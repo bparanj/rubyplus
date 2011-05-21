@@ -1,0 +1,36 @@
+<% cache("archive") do %>
+
+
+
+<% content_for :meta_keywords do %>
+    <% @kw = [] %>    
+	<% @episodes.each { |x| @kw.concat(x.tag_list) } %>
+	<%= meta_tag('keywords', @kw.uniq.join(", ")) %>
+<% end %>
+
+<% @page_title = "Screencast Archive" %>
+
+<fieldset>
+  <legend>Screencast Archive  </legend>
+
+  <div id="episodes">
+
+	<p><%= will_paginate @episodes, :inner_window => 20, :outer_window => 20 %></p>
+
+	<table class="data question">
+		<tr>
+			<th width=10%>Sequence </th>
+			<th>Title</th>
+	    </tr>
+		<%= render :partial => 'episode', :collection => @episodes %>
+  </table>
+
+	<p><%= will_paginate @episodes, :inner_window => 20, :outer_window => 20 %></p>
+	
+<br />
+
+</div>
+
+</fieldset>
+
+<% end %>

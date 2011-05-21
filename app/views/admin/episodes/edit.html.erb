@@ -1,0 +1,12 @@
+<fieldset>
+<legend>Editing episode</legend>
+
+
+<%= error_messages_for :episode %>
+
+<%= render :partial => "form", :locals => { :button_tag => "Update", :tags =>  @tags }  %>
+
+<%= link_to 'Show', admin_episode_path(@episode) %> |
+<%= link_to 'Back', admin_episodes_path %>
+
+</fieldset>

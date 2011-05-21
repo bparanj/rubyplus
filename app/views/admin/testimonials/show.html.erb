@@ -1,0 +1,12 @@
+<fieldset>
+<legend>Testimonial</legend>
+
+<p>
+  <b>Body:</b>
+  <%= h @testimonial.body %>
+</p>
+
+</fieldset>
+
+<%= link_to 'Edit', edit_admin_testimonial_path(@testimonial) %> |
+<%= link_to 'Back', admin_testimonials_path %>

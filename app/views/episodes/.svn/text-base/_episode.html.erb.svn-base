@@ -1,0 +1,4 @@
+<tr class="<%= cycle('odd', 'even') -%>" >
+	<td><%= episode.sequence %></td>
+	<td><%= link_to "#{episode.title}", episode_path(episode) %></td>
+</tr>

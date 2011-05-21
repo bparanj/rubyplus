@@ -1,0 +1,83 @@
+class Admin::UsersController < AdminController
+  before_filter :authenticate 
+
+  def index
+    @users = User.get_all_users_with_pagination(params[:page])
+  end
+
+  def update
+    user = User.find(params[:id])
+    user.unsuspend!
+
+    respond_to do |format|
+      format.html { redirect_to admin_users_url }
+      format.xml  { head :ok }
+    end    
+  end
+
+  def destroy
+    user = User.find(params[:id])
+    user.suspend!
+
+    respond_to do |format|
+      format.html { redirect_to admin_users_url }
+      format.xml  { head :ok }
+    end
+  end
+
+  def pending
+    @users = User.get_users_with_pagination("pending", params[:page])   
+    render  :action => 'index' 
+  end
+
+  def suspended
+    @users = User.get_users_with_pagination("suspended", params[:page])    
+    render  :action => 'index' 
+  end
+
+  def active
+    @users = User.get_users_with_pagination("active", params[:page])    
+    render  :action => 'index' 
+  end  
+
+  def passive
+    @users = User.get_users_with_pagination("passive", params[:page])    
+    render  :action => 'index' 
+  end
+  
+  def mail      
+    search = params[:search] || ""
+    page = params[:page] || 1
+
+    @mail = SentMail.paginate(:page => page,
+                              :per_page => 50,
+                              :conditions => ['sent_to like ?', "%#{search}%"],
+                              :order => 'sent_date')
+  end
+end
+
+# def suspend
+#   @user.suspend! 
+#   redirect_to users_path
+# end
+# 
+# def unsuspend
+#   @user.unsuspend! 
+#   redirect_to users_path
+# end
+# 
+# def destroy
+#   @user.delete!
+#   redirect_to users_path
+# end
+# 
+# def purge
+#   @user.destroy
+#   redirect_to users_path
+# end
+# 
+# protected
+# 
+# def find_user
+#   @user = User.find(params[:id])
+# end

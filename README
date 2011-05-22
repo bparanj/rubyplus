@@ -22,7 +22,7 @@ check in.
 
 4) For moonshine to deploy, in config/deploy.rb add the line:
 
-set :local_config, %w(config/database.yml)
+set :local_config, %w(config/database.yml config/admin.yml)
 
 
 

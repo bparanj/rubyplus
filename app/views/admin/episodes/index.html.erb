@@ -6,7 +6,7 @@
 <div class="episode">
 	<div class="side">
 		<div class="number"><%= episode.sequence %></div>
-		<div class="published_at"><%= episode.published_at.to_s(:long) %> </div>
+		<div class="published_at"><%= display_published_at(episode) %> </div>
 	</div>
 	<div class="main">
 		<h2><%= episode.title %></h2>

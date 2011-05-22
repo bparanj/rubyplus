@@ -5,8 +5,6 @@ class AdminController < ActionController::Base
   # Uncomment the :secret if you're not using the cookie session store
   protect_from_forgery # :secret => '76f7825fbbd6ecc648c24276bb6cc588'
   
-  USER_NAME, PASSWORD = "admin", "ashleyMay26)*redhead"
-  
   layout 'admin'
   uses_tiny_mce(:options => {:theme => 'advanced',
     :browsers => %w{msie gecko},
@@ -25,7 +23,7 @@ class AdminController < ActionController::Base
   
   def authenticate
     authenticate_or_request_with_http_basic do|user_name, password|
-      user_name == USER_NAME && password == PASSWORD
+      user_name == ADMIN_CONFIG['username'] && password == ADMIN_CONFIG['password']
     end
   end
 end

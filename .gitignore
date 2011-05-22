@@ -2,6 +2,7 @@
 db/*.sqlite3
 log/*.log
 tmp/
+config/admin.yml
 config/backup.rb
 config/moonshine.yml
 config/deploy.rb

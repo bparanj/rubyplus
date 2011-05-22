@@ -3,8 +3,18 @@
 2) Import the data into the table
 	mysql -p --user=username < guestdb.txt
 	
-	Add : use database_name to the .txt file 
+	Add : use database_name to the .txt file (database_name must be either 
+	development or production depending which db you want to import to)
 	
+	On production machine:
+	
+	mysql -u root -pProductionPassword -D production_db_name < testimonials.txt
+
+Note: Copy the txt files with data to your server using scp: 
+
+scp testimonials.txt deploy@remote_server:/home/rails/testimonials.txt
+
+
 3) Add config/database.yml to .gitignore in the root of the project
 
 Delete database.yml file if you had checked in or rename it to something else before
@@ -23,17 +33,16 @@ ToDo:
 3) Add the config/admin.yml to local_config array in moonshine
 4) Test admin part of the site
 5) Deploy on Linode and enjoy happy and retired life.
-6) scp the data files to server, import data to database
-7) Remove fields not required by creating a migration (is it updated_at field?)
-8) Use jQuery for datepicker
-9) Tag all episodes before deploying
-10) Refactor rendering error messages (shared/error_messages)
-11) Install friendly_id
-12) Remove discuss_link column - create migration
-13) Remove all episode.id.to_i
-14) Add link to testimonials on the navigation for Testimonials
-15) Add paypal button
-16) Record Rails 3 tutorial and send email blast
+6) Remove fields not required by creating a migration (is it updated_at field?)
+7) Use jQuery for datepicker
+8) Tag all episodes before deploying
+9) Refactor rendering error messages (shared/error_messages)
+10) Install friendly_id
+11) Remove discuss_link column - create migration
+12) Remove all episode.id.to_i
+13) Add link to testimonials on the navigation for Testimonials
+14) Add paypal button
+15) Record Rails 3 tutorial and send email blast
 
 
 Deployment

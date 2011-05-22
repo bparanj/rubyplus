@@ -31,3 +31,159 @@ ToDo:
 11) Install friendly_id
 12) Remove discuss_link column - create migration
 13) Remove all episode.id.to_i
+14) Add link to testimonials on the navigation for Testimonials
+15) Add paypal button
+16) Record Rails 3 tutorial and send email blast
+
+
+Deployment
+
+1) Edit ~/.ssh/config and add the host:
+
+Host rubyplus
+  Hostname 1XX.2XX.1XX.XX 
+  User deploy
+
+2) Login as root and add a user (deploy)
+
+ssh root@my_linode_ip
+adduser deploy
+
+3) Add the deploy user to the sudoers file
+visudo
+
+4) Copy the line for root below the root line and change the user to deploy. Then save the file as sudoers, not sudoers.tmp.
+
+Control-X to exit. Control-O to save
+
+5) Set the host name:
+
+echo "mynewhost" > /etc/hostname;
+hostname -F /etc/hostname;
+
+6) Log out and log back in as user deploy:
+
+ssh deploy@my_linod_ip;
+
+7) sudo apt-get update;
+sudo apt-get upgrade --show-upgraded;
+
+8) And set your timezone:
+
+sudo dpkg-reconfigure tzdata;
+
+9) After this you will need to make sure that your /etc/hosts file is set correctly. Do this by editing the system wide hosts file.
+
+sudo vi /etc/hosts;
+
+10) Make sure you add a line for each domain name you will be pointing to this server. For example:
+
+my_linode_ip mydomainname.com;
+
+
+
+This guide provides basic, step-by-step directions on getting Moonshine installed and configured for your Rails 2.x application. We strongly recommend following these steps in order.
+Preface
+
+We'll preface commands to run on your local machine like so:
+
+    rm@macbook:~$ some command
+
+And we'll preface commands to run on your server like so:
+
+    rails@blackbox:~$ some command
+
+And we'll make blocks of text (either output or contents of a file) like so:
+
+Look at me! I'm a big ol' block o' text!
+
+Aren't I great?
+
+Initial Server Setup
+
+You'll need an Ubuntu server or machine to get started. After the basic install you'll need to run a few commands to get the box ready. If you're a RailsMachine customer, you should be able to skip to the next section (titled 'Adding Moonshine...') as we put your SSH key(s) on the server for you.
+
+First, log into your server via SSH and reset your root password:
+
+    rm@macbook:~$ ssh root@123.123.123.123
+
+    root@blackbox:~$ passwd
+
+NOTE Replace 123.123.123.123 with the IP of your server everywhere you see it.
+
+Add a new user called rails and give it a password:
+
+    root@blackbox:~$ adduser rails
+
+and give it sudo pemissions:
+
+    root@blackbox:~$ visudo
+
+In that file, add this line below "root ALL=(ALL) ALL"
+
+rails   ALL=(ALL) ALL
+
+On your local machine, run:
+
+    rm@macbook:~$ test ! -f ~/.ssh/id_rsa.pub || echo "SSH key has already been generated!"
+
+If you do not see a message saying that the SSH key has already been generated, you'll need to run the following command:
+
+    rm@macbook:~$ ssh-keygen -t rsa
+
+Next, we're going to copy your public key to your server so you can securely connect to it without having to enter your password.
+
+There are two ways to accomplish this step.
+
+Again on your local machine, run:
+
+    rm@macbook:~$ ssh-copy-id rails@123.123.123.123
+
+Command ssh-copy-id should be available on most of modern system, but if its not, here are the steps you have to take, in order to copy your public key to your server. Follow next 7 steps if ssh-copy-id failed or is unavailable.
+
+On your local machine, run:
+
+    rm@macbook:~$ scp ~/.ssh/id_rsa.pub rails@123.123.123.123:/home/rails/my_key.pub
+
+    rm@macbook:~$ ssh rails@123.123.123.123
+
+Now on your server, run these:
+
+    rails@blackbox:~$ mkdir /home/rails/.ssh
+
+    rails@blackbox:~$ tee -a my_key.pub /home/rails/.ssh/authorized_keys
+
+    rails@blackbox:~$ sudo chown -R rails:rails /home/rails/.ssh
+
+    rails@blackbox:~$ sudo chmod 700 /home/rails/.ssh
+
+    rails@blackbox:~$ sudo chmod 600 /home/rails/.ssh/authorized_keys
+
+Now your keys should be in place.
+
+Let's make it easy to connect with your server. On your local machine, open ~/.ssh/config file with any text editor (Textmate, Emacs, Vim, etc) and add your information using the template below:
+
+Host blackbox
+  Hostname 123.123.123.123
+  User rails
+
+Don't forget to change your IP as well as pick a name for your server that makes sense.
+
+Save & close that file. Now you should be able to connect to your server by just typing:
+
+    rm@macbook:~$ ssh blackbox
+
+Okay, we've got one final thing we need to get your initial server setup - give your server access to your github account (you may or may not store your application's code on github, but we do recommend it).
+
+Once you've ssh'd into your server as the rails user, generate your ssh key similar to how to you did it on your local machine:
+
+    rails@blackbox:~$ ssh-keygen -t rsa
+
+It will ask you if you want to give it a password. For ease of use, you should just leave the password blank here. When you're done, you want to output the public key it generates by running this:
+
+    rails@blackbox:~$ cat /home/rails/.ssh/id_rsa.pub
+
+Copy the key that is printed out and enter it into your github account
+
+Reference: http://blog.dynamic50.com/2010/09/28/installing-rails-on-a-fresh-linode-ubuntu-install/
+https://github.com/railsmachine/moonshine/wiki/Tutorial

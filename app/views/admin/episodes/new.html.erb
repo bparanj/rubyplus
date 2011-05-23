@@ -3,7 +3,7 @@
 
 <% if @episode.errors.any? %>
 	<%= render :partical => "shared/error_messages", :target => @episode   %>
- <% end %>
+<% end %>
 
 <%= render :partial => "form", :locals => { :button_tag => "Create"  }  %>
 

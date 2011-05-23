@@ -1,8 +1,10 @@
 <fieldset>
 <legend>New testimonial</legend>
 
+<% if @testimonial.errors.any? %>
+	<%= render :partical => "shared/error_messages", :target => @testimonial   %>
+<% end %>
 
-<%= render :partical => "shared/error_messages", :target => @testimonial   %>
 
 
 <% form_for([:admin, @testimonial]) do |f| %>

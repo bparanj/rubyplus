@@ -200,3 +200,15 @@ Copy the key that is printed out and enter it into your github account
 
 Reference: http://blog.dynamic50.com/2010/09/28/installing-rails-on-a-fresh-linode-ubuntu-install/
 https://github.com/railsmachine/moonshine/wiki/Tutorial
+
+
+Changing mysql password
+
+mysql -u root -p<password>
+use mysql;
+select Host, User, Password from user ;
+update user set password = '' where user = 'root' and host = 'localhost';
+flush privileges;
+su 
+enter root password
+service mysql stop/start/restart

@@ -9,9 +9,9 @@
 		<div class="published_at"><%= display_published_at(@episode)%>   </div>	
 	</div>
 	<div class="main">
-		<h2><%=h @episode.title %></h2>
+		<h2><%= @episode.title %></h2>
 		<div class="description">
-			<%= @episode.description %>
+			<%= raw(@episode.description) %>
 		</div>
 		
 		  <div class="download">

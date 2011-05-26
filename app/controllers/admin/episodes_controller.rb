@@ -24,6 +24,7 @@ class Admin::EpisodesController < AdminController
 
     if @episode.save
       flash[:notice] = 'Episode was successfully created.'
+      redirect_to admin_episodes_url
     else
       render :action => "new" 
     end

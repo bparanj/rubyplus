@@ -212,3 +212,8 @@ flush privileges;
 su 
 enter root password
 service mysql stop/start/restart
+
+--------------------
+
+
+

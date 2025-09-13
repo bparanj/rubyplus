@@ -1,0 +1,1283 @@
+diff --git a/e5s/internal/adapters/outbound/inmemory/provider.go b/e5s/internal/adapters/outbound/inmemory/provider.go
+index 14611cc..ae1cdab 100644
+--- a/e5s/internal/adapters/outbound/inmemory/provider.go
++++ b/e5s/internal/adapters/outbound/inmemory/provider.go
+@@ -4,8 +4,8 @@
+ // a configured trust domain. This provider is not suitable for production due to its
+ // lack of persistence and security hardening.
+ //
+-// All operations are thread-safe, and it supports SVID rotation watching with
+-// error backoff. Certificates are encoded in PEM format using the pem package.
++// All operations are thread-safe. Certificates are encoded in PEM format using the pem package.
++// For production use with go-spiffe's built-in certificate rotation, use the SPIRE provider instead.
+ package inmemory
+ 
+ import (
+@@ -24,7 +24,9 @@ import (
+ 	"sync"
+ 	"time"
+ 
++	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
+ 	"github.com/spiffe/go-spiffe/v2/spiffeid"
++	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+ 	"github.com/sufield/e5s/internal/adapters/outbound/pem"
+ 	errx "github.com/sufield/e5s/internal/errors"
+ 	"github.com/sufield/e5s/internal/ports"
+@@ -33,6 +35,32 @@ import (
+ // Interface conformance check
+ var _ ports.IdentityProvider = (*Provider)(nil)
+ 
++// staticSource implements both x509svid.Source and x509bundle.Source interfaces
++// for the in-memory provider. It holds static (non-rotating) certificates.
++type staticSource struct {
++	mu     sync.RWMutex
++	svid   *x509svid.SVID
++	bundle *x509bundle.Bundle
++}
++
++func (s *staticSource) GetX509SVID() (*x509svid.SVID, error) {
++	s.mu.RLock()
++	defer s.mu.RUnlock()
++	if s.svid == nil {
++		return nil, fmt.Errorf("svid not initialized")
++	}
++	return s.svid, nil
++}
++
++func (s *staticSource) GetX509BundleForTrustDomain(td spiffeid.TrustDomain) (*x509bundle.Bundle, error) {
++	s.mu.RLock()
++	defer s.mu.RUnlock()
++	if s.bundle == nil || s.bundle.TrustDomain() != td {
++		return nil, fmt.Errorf("bundle not initialized for %s", td)
++	}
++	return s.bundle, nil
++}
++
+ // Clock is an interface for time operations (for testing)
+ type Clock interface {
+ 	Now() time.Time
+@@ -52,11 +80,6 @@ const (
+ 	KeyTypeRSA   KeyType = "rsa"
+ )
+ 
+-type watcher struct {
+-	cancel context.CancelFunc
+-	ticker *time.Ticker
+-}
+-
+ // Provider implements ports.IdentityProvider using an in-memory CA
+ type Provider struct {
+ 	trustDomain     spiffeid.TrustDomain
+@@ -68,11 +91,9 @@ type Provider struct {
+ 	rootCert        *x509.Certificate
+ 	rootKey         crypto.PrivateKey
+ 	svids           map[spiffeid.ID]*svidEntry
+-	// For rotation management
+-	rotationInterval time.Duration
+-	watchers         map[spiffeid.ID]*watcher
+-	closed           bool
+-	closeOnce        sync.Once
++	src             *staticSource
++	closed          bool
++	closeOnce       sync.Once
+ }
+ 
+ type svidEntry struct {
+@@ -145,23 +166,45 @@ func NewProvider(opts Options) (*Provider, error) {
+ 	if err != nil {
+ 		return nil, fmt.Errorf("%w: failed to create root certificate: %v", errx.ErrCertificateGeneration, err)
+ 	}
+-	// Set rotation interval with floor
+-	rotation := opts.DefaultTTL / 2
+-	if rotation < time.Second {
+-		rotation = time.Second
++	// Create bundle from root CA
++	bundle := bundleFromRoot(td, rootCert)
++	
++	// Initialize static source
++	staticSrc := &staticSource{
++		bundle: bundle,
+ 	}
++	
+ 	p := &Provider{
+-		trustDomain:      td,
+-		defaultTTL:       opts.DefaultTTL,
+-		defaultWorkload:  opts.DefaultWorkloadPath,
+-		clock:            opts.Clock,
+-		randReader:       opts.RandReader,
+-		rootCert:         rootCert,
+-		rootKey:          rootKey,
+-		svids:            make(map[spiffeid.ID]*svidEntry),
+-		rotationInterval: rotation,
+-		watchers:         make(map[spiffeid.ID]*watcher),
++		trustDomain:     td,
++		defaultTTL:      opts.DefaultTTL,
++		defaultWorkload: opts.DefaultWorkloadPath,
++		clock:           opts.Clock,
++		randReader:      opts.RandReader,
++		rootCert:        rootCert,
++		rootKey:         rootKey,
++		svids:           make(map[spiffeid.ID]*svidEntry),
++		src:             staticSrc,
++	}
++	
++	// Generate initial SVID for default workload to ensure TLS can start immediately
++	id, err := p.resolveWorkloadID(ports.WorkloadID(""))
++	if err != nil {
++		return nil, err
+ 	}
++	now := opts.Clock.Now()
++	svid, err := p.generateSVID(context.Background(), id, now)
++	if err != nil {
++		return nil, err
++	}
++	p.svids[id] = &svidEntry{svid: svid, lastIssued: now}
++	
++	// Convert ports.SVID to x509svid.SVID for the static source
++	x509SVID, err := pem.ToX509SVID(svid.CertPEM, svid.KeyPEM, id)
++	if err != nil {
++		return nil, fmt.Errorf("failed to convert SVID for static source: %w", err)
++	}
++	staticSrc.svid = x509SVID
++	
+ 	return p, nil
+ }
+ 
+@@ -236,6 +279,13 @@ func createRootCertificate(opts Options, td spiffeid.TrustDomain, key crypto.Pri
+ 	return rootCert, nil
+ }
+ 
++// bundleFromRoot creates an x509bundle.Bundle from a root CA certificate
++func bundleFromRoot(td spiffeid.TrustDomain, root *x509.Certificate) *x509bundle.Bundle {
++	bundle := x509bundle.New(td)
++	bundle.AddX509Authority(root)
++	return bundle
++}
++
+ // GetSVID returns the current SVID for a workload
+ func (p *Provider) GetSVID(ctx context.Context, id ports.WorkloadID) (ports.SVID, error) {
+ 	// First check if closed with read lock
+@@ -289,6 +339,18 @@ func (p *Provider) GetSVID(ctx context.Context, id ports.WorkloadID) (ports.SVID
+ 	return *svid, nil
+ }
+ 
++// SVIDSource returns the static source for go-spiffe TLS integration
++// This provides a non-rotating source for development/testing
++func (p *Provider) SVIDSource() x509svid.Source {
++	return p.src
++}
++
++// BundleSource returns the static source for go-spiffe TLS integration
++// This provides a non-rotating source for development/testing
++func (p *Provider) BundleSource() x509bundle.Source {
++	return p.src
++}
++
+ // resolveWorkloadID resolves the workload ID, using default if empty
+ func (p *Provider) resolveWorkloadID(id ports.WorkloadID) (spiffeid.ID, error) {
+ 	if string(id) == "" {
+@@ -312,125 +374,6 @@ func (p *Provider) resolveWorkloadID(id ports.WorkloadID) (spiffeid.ID, error) {
+ 	return spiffeID, nil
+ }
+ 
+-// WatchRotation watches for SVID rotation events with improved concurrency and error handling
+-func (p *Provider) WatchRotation(ctx context.Context, id ports.WorkloadID) (<-chan ports.SVIDUpdate, error) {
+-	p.mu.Lock()
+-	defer p.mu.Unlock()
+-	if p.closed {
+-		return nil, errx.ErrProviderClosed
+-	}
+-	spiffeID, err := p.resolveWorkloadID(id)
+-	if err != nil {
+-		return nil, err
+-	}
+-	// cancel/stop any existing watcher
+-	if w := p.watchers[spiffeID]; w != nil {
+-		w.cancel()
+-		w.ticker.Stop()
+-	}
+-	// new watcher
+-	watchCtx, cancel := context.WithCancel(ctx)
+-	ticker := time.NewTicker(p.rotationInterval)
+-	w := &watcher{cancel: cancel, ticker: ticker}
+-	p.watchers[spiffeID] = w
+-	ch := make(chan ports.SVIDUpdate, 10)
+-	go func(curr *watcher) {
+-		defer close(ch)
+-		defer ticker.Stop()
+-		defer func() {
+-			p.mu.Lock()
+-			if p.watchers[spiffeID] == curr {
+-				delete(p.watchers, spiffeID)
+-			}
+-			p.mu.Unlock()
+-		}()
+-		// Send initial SVID
+-		svid, err := p.GetSVID(watchCtx, ports.WorkloadID(spiffeID.String()))
+-		if err != nil {
+-			select {
+-			case ch <- ports.SVIDUpdate{Err: err}:
+-			case <-watchCtx.Done():
+-				return
+-			}
+-			return
+-		} else {
+-			select {
+-			case ch <- ports.SVIDUpdate{SVID: &svid}:
+-			case <-watchCtx.Done():
+-				return
+-			}
+-		}
+-		// Backoff for handling errors
+-		backoff := time.Second
+-		const maxBackoff = 30 * time.Second
+-		// Watch for rotations
+-		for {
+-			select {
+-			case <-watchCtx.Done():
+-				return
+-			case <-ticker.C:
+-				// Generate new SVID (simulating rotation)
+-				p.mu.RLock()
+-				if p.closed {
+-					p.mu.RUnlock()
+-					return
+-				}
+-				p.mu.RUnlock()
+-				now := p.clock.Now()
+-				newSVID, err := p.generateSVIDWithLock(watchCtx, spiffeID, now)
+-				if err != nil {
+-					// Send error with backoff
+-					select {
+-					case ch <- ports.SVIDUpdate{Err: err}:
+-					case <-watchCtx.Done():
+-						return
+-					}
+-					// context-aware backoff
+-					select {
+-					case <-time.After(backoff):
+-					case <-watchCtx.Done():
+-						return
+-					}
+-					if backoff < maxBackoff {
+-						backoff *= 2
+-						if backoff > maxBackoff {
+-							backoff = maxBackoff
+-						}
+-					}
+-					continue
+-				}
+-				// Reset backoff on success
+-				backoff = time.Second
+-				// Send new SVID
+-				select {
+-				case ch <- ports.SVIDUpdate{SVID: newSVID}:
+-				case <-watchCtx.Done():
+-					return
+-				}
+-			}
+-		}
+-	}(w)
+-	return ch, nil
+-}
+-
+-// generateSVIDWithLock generates a new SVID and updates the cache with proper locking
+-func (p *Provider) generateSVIDWithLock(ctx context.Context, spiffeID spiffeid.ID, now time.Time) (*ports.SVID, error) {
+-	p.mu.Lock()
+-	defer p.mu.Unlock()
+-	if p.closed {
+-		return nil, errx.ErrProviderClosed
+-	}
+-	newSVID, err := p.generateSVID(ctx, spiffeID, now)
+-	if err != nil {
+-		return nil, err
+-	}
+-	// Update cache
+-	p.svids[spiffeID] = &svidEntry{
+-		svid:       newSVID,
+-		lastIssued: now,
+-	}
+-	return newSVID, nil
+-}
+ 
+ // Close releases resources with idempotency
+ func (p *Provider) Close() error {
+@@ -440,13 +383,6 @@ func (p *Provider) Close() error {
+ 		return nil // idempotent
+ 	}
+ 	p.closed = true
+-	for _, w := range p.watchers {
+-		w.ticker.Stop()
+-		w.cancel()
+-	}
+-	for k := range p.watchers {
+-		delete(p.watchers, k)
+-	}
+ 	for k := range p.svids {
+ 		delete(p.svids, k)
+ 	}
+diff --git a/e5s/internal/adapters/outbound/inmemory/provider_configuration_test.go b/e5s/internal/adapters/outbound/inmemory/provider_configuration_test.go
+index a14f742..25dd112 100644
+--- a/e5s/internal/adapters/outbound/inmemory/provider_configuration_test.go
++++ b/e5s/internal/adapters/outbound/inmemory/provider_configuration_test.go
+@@ -170,10 +170,6 @@ func TestInMemoryProvider_Configuration(t *testing.T) {
+ 			t.Errorf("GetSVID on closed provider should return ErrProviderClosed, got: %v", err)
+ 		}
+ 
+-		_, err = provider.WatchRotation(ctx, ports.WorkloadID(""))
+-		if err != errors.ErrProviderClosed {
+-			t.Errorf("WatchRotation on closed provider should return ErrProviderClosed, got: %v", err)
+-		}
+ 	})
+ 
+ 	t.Run("TTL validation", func(t *testing.T) {
+diff --git a/e5s/internal/adapters/outbound/pem/pem.go b/e5s/internal/adapters/outbound/pem/pem.go
+index 6321063..78fdfec 100644
+--- a/e5s/internal/adapters/outbound/pem/pem.go
++++ b/e5s/internal/adapters/outbound/pem/pem.go
+@@ -14,6 +14,8 @@ import (
+ 	"encoding/pem"
+ 	"fmt"
+ 
++	"github.com/spiffe/go-spiffe/v2/spiffeid"
++	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+ 	errx "github.com/sufield/e5s/internal/errors"
+ )
+ 
+@@ -253,4 +255,35 @@ func parsePrivateKeyBlock(block *pem.Block) (crypto.PrivateKey, error) {
+ 	default:
+ 		return nil, fmt.Errorf("%w: unsupported PEM block type: %s", errx.ErrInvalidPEM, block.Type)
+ 	}
++}
++
++// ToX509SVID converts PEM-encoded certificate and key to an x509svid.SVID
++// This is used by the in-memory provider to create static sources
++func ToX509SVID(certPEM, keyPEM []byte, id spiffeid.ID) (*x509svid.SVID, error) {
++	// Parse certificate chain
++	certs, err := DecodeCertChain(certPEM)
++	if err != nil {
++		return nil, fmt.Errorf("failed to decode certificate chain: %w", err)
++	}
++	if len(certs) == 0 {
++		return nil, fmt.Errorf("certificate chain is empty")
++	}
++
++	// Parse private key
++	key, err := DecodePrivateKey(keyPEM)
++	if err != nil {
++		return nil, fmt.Errorf("failed to decode private key: %w", err)
++	}
++
++	// Ensure key implements crypto.Signer
++	signer, ok := key.(crypto.Signer)
++	if !ok {
++		return nil, fmt.Errorf("private key does not implement crypto.Signer")
++	}
++
++	return &x509svid.SVID{
++		ID:           id,
++		Certificates: certs,
++		PrivateKey:   signer,
++	}, nil
+ }
+\ No newline at end of file
+diff --git a/e5s/internal/adapters/outbound/spire/provider.go b/e5s/internal/adapters/outbound/spire/provider.go
+index 6f97d86..33267f0 100644
+--- a/e5s/internal/adapters/outbound/spire/provider.go
++++ b/e5s/internal/adapters/outbound/spire/provider.go
+@@ -1,7 +1,7 @@
+ // Package spire provides an implementation of the ports.IdentityProvider interface
+ // using the SPIFFE Workload API (via go-spiffe/v2). It fetches X.509 SVIDs from
+-// a SPIRE agent, handles PEM encoding, and supports rotation watching with change
+-// detection via fingerprinting. This provider is suitable for production environments
++// a SPIRE agent and handles PEM encoding. The go-spiffe SDK handles automatic
++// certificate rotation internally. This provider is suitable for production environments
+ // where SPIRE is used for workload identities.
+ //
+ // All operations are thread-safe, and it ensures idempotent closure. Errors are wrapped
+@@ -10,8 +10,6 @@ package spire
+ 
+ import (
+ 	"context"
+-	"crypto/sha256"
+-	"encoding/hex"
+ 	"fmt"
+ 	"os"
+ 	"strings"
+@@ -19,7 +17,9 @@ import (
+ 	"sync/atomic"
+ 	"time"
+ 
++	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
+ 	"github.com/spiffe/go-spiffe/v2/spiffeid"
++	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+ 	"github.com/spiffe/go-spiffe/v2/workloadapi"
+ 	"github.com/sufield/e5s/internal/adapters/outbound/pem"
+ 	errx "github.com/sufield/e5s/internal/errors"
+@@ -88,6 +88,16 @@ func NewProvider(ctx context.Context, socketPath string) (*Provider, error) {
+ 	return &Provider{src: src}, nil
+ }
+ 
++// SVIDSource returns the X509Source for go-spiffe's built-in SVID rotation
++func (p *Provider) SVIDSource() x509svid.Source {
++	return p.src
++}
++
++// BundleSource returns the X509Source as a bundle source for go-spiffe's built-in trust bundle rotation
++func (p *Provider) BundleSource() x509bundle.Source {
++	return p.src
++}
++
+ // GetSVID fetches the current X.509 SVID from the Workload API, encodes the
+ // certificate chain, private key, and trust bundle to PEM, and computes the
+ // intersection of validity periods across the chain.
+@@ -165,117 +175,6 @@ func (p *Provider) GetSVID(ctx context.Context, id ports.WorkloadID) (ports.SVID
+ 	}, nil
+ }
+ 
+-// svidFingerprint creates a unique fingerprint for an SVID to detect changes
+-// by hashing the certificate PEM, workload ID, and expiration time.
+-func (p *Provider) svidFingerprint(svid ports.SVID) string {
+-	// Create hash from certificate chain, expiry, and workload ID
+-	hasher := sha256.New()
+-	hasher.Write([]byte(svid.CertPEM))
+-	hasher.Write([]byte(svid.Workload.String()))
+-	hasher.Write([]byte(fmt.Sprintf("%d", svid.ExpiresAt)))
+-	return hex.EncodeToString(hasher.Sum(nil))
+-}
+-
+-// WatchRotation sets up a channel to receive SVID updates on rotations.
+-// It sends the initial SVID, then waits for updates via the source's
+-// WaitUntilUpdated, checking for changes using fingerprints. It applies
+-// exponential backoff on errors and respects context cancellation.
+-//
+-// If the provider is closed, it returns an error immediately.
+-func (p *Provider) WatchRotation(ctx context.Context, id ports.WorkloadID) (<-chan ports.SVIDUpdate, error) {
+-	if p.closed.Load() {
+-		return nil, errx.ErrProviderClosed
+-	}
+-
+-	ch := make(chan ports.SVIDUpdate, 10)
+-
+-	go func() {
+-		defer close(ch)
+-
+-		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+-		svid, err := p.GetSVID(initCtx, id)
+-		cancel()
+-		if err != nil {
+-			select {
+-			case ch <- ports.SVIDUpdate{Err: err}:
+-			case <-ctx.Done():
+-			}
+-			return
+-		}
+-		fp := p.svidFingerprint(svid)
+-		select {
+-		case ch <- ports.SVIDUpdate{SVID: &svid}:
+-		case <-ctx.Done():
+-			return
+-		}
+-		backoff := time.Second
+-		const maxBackoff = 30 * time.Second
+-
+-		for {
+-			uctx, ucancel := context.WithTimeout(ctx, 30*time.Second)
+-			err := p.src.WaitUntilUpdated(uctx) // or an equivalent SDK primitive
+-			ucancel()
+-			if ctx.Err() != nil {
+-				return
+-			}
+-			if err != nil {
+-				t := time.NewTimer(backoff)
+-				// surface as rotation failure for consumers using errors.Is
+-				select {
+-				case <-t.C:
+-				case <-ctx.Done():
+-					t.Stop()
+-					return
+-				}
+-				if backoff < maxBackoff {
+-					backoff *= 2
+-					if backoff > maxBackoff {
+-						backoff = maxBackoff
+-					}
+-				}
+-				continue
+-			}
+-
+-			sctx, scancel := context.WithTimeout(ctx, 5*time.Second)
+-			ns, err := p.GetSVID(sctx, id)
+-			scancel()
+-			if err != nil {
+-				t := time.NewTimer(backoff)
+-				select {
+-				case ch <- ports.SVIDUpdate{Err: fmt.Errorf("spire: %w: %v", errx.ErrRotationFailed, err)}:
+-				case <-ctx.Done():
+-					t.Stop()
+-					return
+-				}
+-				select {
+-				case <-t.C:
+-				case <-ctx.Done():
+-					t.Stop()
+-					return
+-				}
+-				if backoff < maxBackoff {
+-					backoff *= 2
+-					if backoff > maxBackoff {
+-						backoff = maxBackoff
+-					}
+-				}
+-				continue
+-			}
+-			backoff = time.Second
+-
+-			nfp := p.svidFingerprint(ns)
+-			if nfp != fp {
+-				select {
+-				case ch <- ports.SVIDUpdate{SVID: &ns}:
+-				case <-ctx.Done():
+-					return
+-				}
+-				fp = nfp
+-			}
+-		}
+-	}()
+-	return ch, nil
+-}
+ 
+ // Close closes the underlying X509Source idempotently. Subsequent calls return nil.
+ // It sets the closed flag to prevent further operations.
+diff --git a/e5s/internal/adapters/outbound/spire/provider_edge_cases_test.go b/e5s/internal/adapters/outbound/spire/provider_edge_cases_test.go
+index cc15f80..44ece9e 100644
+--- a/e5s/internal/adapters/outbound/spire/provider_edge_cases_test.go
++++ b/e5s/internal/adapters/outbound/spire/provider_edge_cases_test.go
+@@ -6,7 +6,6 @@ import (
+ 	"testing"
+ 	"time"
+ 
+-	"github.com/spiffe/go-spiffe/v2/spiffeid"
+ 	e5serrors "github.com/sufield/e5s/internal/errors"
+ 	"github.com/sufield/e5s/internal/ports"
+ )
+@@ -77,47 +76,6 @@ func TestSPIREProvider_EdgeCases(t *testing.T) {
+ 		}
+ 	})
+ 
+-	t.Run("SVID fingerprint consistency", func(t *testing.T) {
+-		provider := &Provider{} // Don't need real source for fingerprint testing
+-		
+-		testID := spiffeid.RequireFromString("spiffe://example.org/test")
+-		
+-		svid1 := ports.SVID{
+-			CertPEM:   []byte("cert1"),
+-			Workload:  ports.WorkloadID(testID.String()),
+-			ExpiresAt: 1234567890,
+-		}
+-		
+-		svid2 := ports.SVID{
+-			CertPEM:   []byte("cert1"), // Same cert
+-			Workload:  ports.WorkloadID(testID.String()), // Same workload
+-			ExpiresAt: 1234567890, // Same expiry
+-		}
+-		
+-		svid3 := ports.SVID{
+-			CertPEM:   []byte("cert2"), // Different cert
+-			Workload:  ports.WorkloadID(testID.String()),
+-			ExpiresAt: 1234567890,
+-		}
+-		
+-		fp1 := provider.svidFingerprint(svid1)
+-		fp2 := provider.svidFingerprint(svid2)
+-		fp3 := provider.svidFingerprint(svid3)
+-		
+-		if fp1 != fp2 {
+-			t.Error("Identical SVIDs should have same fingerprint")
+-		}
+-		
+-		if fp1 == fp3 {
+-			t.Error("Different SVIDs should have different fingerprints")
+-		}
+-		
+-		// Test that fingerprints are stable
+-		fp1_again := provider.svidFingerprint(svid1)
+-		if fp1 != fp1_again {
+-			t.Error("Fingerprint should be stable across calls")
+-		}
+-	})
+ 
+ 	t.Run("Closed provider returns appropriate errors", func(t *testing.T) {
+ 		ctx := context.Background()
+@@ -134,11 +92,6 @@ func TestSPIREProvider_EdgeCases(t *testing.T) {
+ 			t.Errorf("GetSVID on closed provider should return ErrProviderClosed, got: %v", err)
+ 		}
+ 		
+-		// WatchRotation on closed provider should return ErrProviderClosed
+-		_, err = provider.WatchRotation(ctx, ports.WorkloadID(""))
+-		if err != e5serrors.ErrProviderClosed {
+-			t.Errorf("WatchRotation on closed provider should return ErrProviderClosed, got: %v", err)
+-		}
+ 	})
+ 
+ 	t.Run("Socket path validation covers edge cases", func(t *testing.T) {
+diff --git a/e5s/internal/app/health.go b/e5s/internal/app/health.go
+index a7a40f6..a88dacd 100644
+--- a/e5s/internal/app/health.go
++++ b/e5s/internal/app/health.go
+@@ -10,18 +10,19 @@ import (
+ )
+ 
+ type HealthChecker interface {
+-	Check(ctx context.Context, cfg *ports.Config, opts ServerServiceOptions, p ports.IdentityProvider, b TLSBuilder) error
++	Check(ctx context.Context, cfg *ports.Config, opts ServerServiceOptions, p ports.IdentityProvider) error
+ }
+ 
+ type DefaultHealth struct{}
+ 
+-func (DefaultHealth) Check(ctx context.Context, cfg *ports.Config, opts ServerServiceOptions, p ports.IdentityProvider, b TLSBuilder) error {
++func (DefaultHealth) Check(ctx context.Context, cfg *ports.Config, opts ServerServiceOptions, p ports.IdentityProvider) error {
++	// Verify we can get a valid SVID from the source
+ 	svid, err := p.GetSVID(ctx, ports.WorkloadID(""))
+ 	if err != nil {
+ 		return fmt.Errorf("%w: get SVID: %w", e5serrors.ErrHealthCheckFailed, err)
+ 	}
+ 
+-	// quick time sanity
++	// Quick time sanity check
+ 	now := time.Now()
+ 	if svid.ExpiresAt != 0 && now.After(time.Unix(svid.ExpiresAt, 0)) {
+ 		return fmt.Errorf("%w: SVID expired", e5serrors.ErrHealthCheckFailed)
+@@ -29,16 +30,14 @@ func (DefaultHealth) Check(ctx context.Context, cfg *ports.Config, opts ServerSe
+ 	if svid.NotBefore != 0 && now.Before(time.Unix(svid.NotBefore, 0)) {
+ 		return fmt.Errorf("%w: SVID not valid yet", e5serrors.ErrHealthCheckFailed)
+ 	}
+-	if _, _, err := b.FromSVID(svid, TLSBuilderOptions{CustomVerifier: opts.CustomVerifier}); err != nil {
+-		return fmt.Errorf("%w: TLS build: %w", e5serrors.ErrHealthCheckFailed, err)
++
++	// Verify sources are available (certificate rotation is handled by go-spiffe internally)
++	if p.SVIDSource() == nil {
++		return fmt.Errorf("%w: SVID source unavailable", e5serrors.ErrHealthCheckFailed)
+ 	}
+-	// rotation pipe smoketest (non-blocking)
+-	if opts.EnableRotation {
+-		cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+-		defer cancel()
+-		if _, err := p.WatchRotation(cctx, ports.WorkloadID("")); err != nil {
+-			return fmt.Errorf("%w: rotation watch: %w", e5serrors.ErrHealthCheckFailed, err)
+-		}
++	if p.BundleSource() == nil {
++		return fmt.Errorf("%w: bundle source unavailable", e5serrors.ErrHealthCheckFailed)
+ 	}
++
+ 	return nil
+ }
+\ No newline at end of file
+diff --git a/e5s/internal/app/options.go b/e5s/internal/app/options.go
+index aa6756a..2d7baea 100644
+--- a/e5s/internal/app/options.go
++++ b/e5s/internal/app/options.go
+@@ -1,9 +1,5 @@
+ package app
+ 
+-import (
+-	"crypto/x509"
+-	"time"
+-)
+ 
+ type Logger interface {
+ 	Errorf(format string, args ...interface{})
+@@ -12,9 +8,6 @@ type Logger interface {
+ }
+ 
+ type ServerServiceOptions struct {
+-	CustomVerifier           func(rawCerts [][]byte, chains [][]*x509.Certificate) error
+-	EnableRotation           bool
+-	MaxBackoffDuration       time.Duration
+ 	DisableAddressResolution bool
+ 	Logger                   Logger
+ }
+\ No newline at end of file
+diff --git a/e5s/internal/app/rotation.go b/e5s/internal/app/rotation.go
+deleted file mode 100644
+index 02315b8..0000000
+--- a/e5s/internal/app/rotation.go
++++ /dev/null
+@@ -1,117 +0,0 @@
+-package app
+-
+-import (
+-	"context"
+-	"crypto/tls"
+-	"math/rand"
+-	"time"
+-
+-	"github.com/sufield/e5s/internal/ports"
+-)
+-
+-type RotationWatcher interface {
+-	Start(ctx context.Context,
+-		provider ports.IdentityProvider,
+-		wid ports.WorkloadID,
+-		lastHash [32]byte,
+-		build func(newSVID ports.SVID) (*tls.Config, [32]byte, error),
+-		log Logger,
+-		maxBackoff time.Duration,
+-	) (stop func(), err error)
+-}
+-
+-type DefaultRotation struct{}
+-
+-func (DefaultRotation) Start(ctx context.Context, p ports.IdentityProvider, wid ports.WorkloadID,
+-	last [32]byte, build func(ports.SVID) (*tls.Config, [32]byte, error), log Logger, maxB time.Duration,
+-) (func(), error) {
+-
+-	if maxB == 0 {
+-		maxB = 5 * time.Minute
+-	}
+-	ch, err := p.WatchRotation(ctx, wid)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	ctx, cancel := context.WithCancel(ctx)
+-	go func() {
+-		defer cancel()
+-		backoff := time.Second
+-		cur := last
+-		for {
+-			select {
+-			case <-ctx.Done():
+-				return
+-			case up, ok := <-ch:
+-				if !ok {
+-					if log != nil {
+-						log.Infof("rotation channel closed")
+-					}
+-					return
+-				}
+-				if up.Err != nil {
+-					if log != nil {
+-						log.Errorf("rotation error: %v", up.Err)
+-					}
+-					sleepOrExit(ctx, jitter(backoff))
+-					backoff = min(backoff*2, maxB)
+-					continue
+-				}
+-				if up.SVID == nil {
+-					if log != nil {
+-						log.Debugf("rotation: empty SVID")
+-					}
+-					continue
+-				}
+-
+-				cfg, h, err := build(*up.SVID)
+-				if err != nil {
+-					if log != nil {
+-						log.Errorf("build TLS failed: %v", err)
+-					}
+-					sleepOrExit(ctx, jitter(backoff))
+-					backoff = min(backoff*2, maxB)
+-					continue
+-				}
+-
+-				if h == cur {
+-					if log != nil {
+-						log.Debugf("rotation: unchanged")
+-					}
+-					backoff = time.Second
+-					continue
+-				}
+-				cur = h
+-				if log != nil {
+-					_ = cfg
+-					log.Infof("rotation: applied") // caller updates externally if needed
+-				}
+-				backoff = time.Second
+-			}
+-		}
+-	}()
+-	return cancel, nil
+-}
+-
+-func sleepOrExit(ctx context.Context, d time.Duration) {
+-	t := time.NewTimer(d)
+-	defer t.Stop()
+-	select {
+-	case <-t.C:
+-	case <-ctx.Done():
+-	}
+-}
+-
+-func min(a, b time.Duration) time.Duration {
+-	if a < b {
+-		return a
+-	}
+-	return b
+-}
+-
+-// jitter adds ±20% randomization to prevent thundering herd
+-func jitter(d time.Duration) time.Duration {
+-	j := time.Duration(float64(d) * 0.2) // ±20%
+-	return d - j + time.Duration(rand.Float64()*float64(2*j))
+-}
+\ No newline at end of file
+diff --git a/e5s/internal/app/server_service.go b/e5s/internal/app/server_service.go
+index 3fc1c26..e876175 100644
+--- a/e5s/internal/app/server_service.go
++++ b/e5s/internal/app/server_service.go
+@@ -9,34 +9,30 @@ import (
+ 	"strconv"
+ 	"strings"
+ 
++	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
+ 	e5serrors "github.com/sufield/e5s/internal/errors"
+ 	"github.com/sufield/e5s/internal/ports"
+ )
+ 
+ type ServerService struct {
+-	cfg          *ports.Config
+-	provider     ports.IdentityProvider
+-	tlsb         TLSBuilder
+-	validate     ConfigValidator
+-	rot          RotationWatcher
+-	health       HealthChecker
+-	opts         ServerServiceOptions
+-	lastSVIDHash [32]byte
++	cfg      *ports.Config
++	provider ports.IdentityProvider
++	validate ConfigValidator
++	health   HealthChecker
++	opts     ServerServiceOptions
+ }
+ 
+ func NewServerService(
+ 	cfg *ports.Config,
+ 	provider ports.IdentityProvider,
+-	tlsb TLSBuilder,
+ 	validator ConfigValidator,
+-	rot RotationWatcher,
+ 	health HealthChecker,
+ 	opts ServerServiceOptions,
+ ) (*ServerService, error) {
+-	if cfg == nil || provider == nil || tlsb == nil || validator == nil {
++	if cfg == nil || provider == nil || validator == nil {
+ 		return nil, fmt.Errorf("%w: missing dependency", e5serrors.ErrConfigInvalid)
+ 	}
+-	return &ServerService{cfg: cfg, provider: provider, tlsb: tlsb, validate: validator, rot: rot, health: health, opts: opts}, nil
++	return &ServerService{cfg: cfg, provider: provider, validate: validator, health: health, opts: opts}, nil
+ }
+ 
+ func (s *ServerService) Prepare(ctx context.Context) (string, *tls.Config, io.Closer, error) {
+@@ -44,27 +40,29 @@ func (s *ServerService) Prepare(ctx context.Context) (string, *tls.Config, io.Cl
+ 		return "", nil, nil, fmt.Errorf("%w: %w", e5serrors.ErrConfigInvalid, err)
+ 	}
+ 
+-	svid, err := s.provider.GetSVID(ctx, ports.WorkloadID(""))
+-	if err != nil {
+-		return "", nil, nil, fmt.Errorf("%w: get SVID: %w", e5serrors.ErrTLSConfig, err)
++	// Run health check before building TLS to fail fast if provider is not ready
++	if s.health != nil {
++		if err := s.health.Check(ctx, s.cfg, s.opts, s.provider); err != nil {
++			return "", nil, nil, err
++		}
+ 	}
+ 
+-	tlsCfg, hash, err := s.tlsb.FromSVID(svid, TLSBuilderOptions{
+-		CustomVerifier: s.opts.CustomVerifier,
+-	})
+-	if err != nil {
+-		return "", nil, nil, fmt.Errorf("%w: create TLS: %w", e5serrors.ErrTLSConfig, err)
++	// Create TLS config using go-spiffe's tlsconfig with built-in certificate rotation
++	// The SVIDSource and BundleSource handle certificate rotation internally
++	svidSrc := s.provider.SVIDSource()
++	bundleSrc := s.provider.BundleSource()
++	if svidSrc == nil || bundleSrc == nil {
++		return "", nil, nil, fmt.Errorf("%w: identity provider has no sources", e5serrors.ErrTLSConfig)
+ 	}
+-	tlsCfg.MinVersion, tlsCfg.MaxVersion = tls.VersionTLS13, tls.VersionTLS13
+-	s.lastSVIDHash = hash
++	tlsCfg := tlsconfig.MTLSServerConfig(
++		svidSrc,                    // Auto-refreshing SVID source
++		bundleSrc,                  // Auto-refreshing bundle source
++		tlsconfig.AuthorizeAny(),   // Use AuthorizeID or custom authorizer as needed
++	)
+ 
+-	// Create TLS config store for live rotation
+-	store := &TLSConfigStore{}
+-	store.Set(tlsCfg)
+-	
+-	// Return a config that delegates dynamically
+-	dyn := tlsCfg.Clone()
+-	dyn.GetConfigForClient = store.GetConfigForClient
++	// Enforce TLS 1.3 only
++	tlsCfg.MinVersion = tls.VersionTLS13
++	tlsCfg.MaxVersion = tls.VersionTLS13
+ 
+ 	host := strings.TrimSpace(s.cfg.Server.BindAddress)
+ 	if host == "" {
+@@ -72,24 +70,6 @@ func (s *ServerService) Prepare(ctx context.Context) (string, *tls.Config, io.Cl
+ 	}
+ 	addr := net.JoinHostPort(host, strconv.Itoa(s.cfg.Server.BindPort))
+ 
+-	// Rotation (optional) - capture store in the closure
+-	var closer io.Closer = s.provider
+-	if s.opts.EnableRotation && s.rot != nil {
+-		stop, err := s.rot.Start(ctx, s.provider, ports.WorkloadID(""), hash, func(newSVID ports.SVID) (*tls.Config, [32]byte, error) {
+-			cfg, h, e := s.tlsb.FromSVID(newSVID, TLSBuilderOptions{CustomVerifier: s.opts.CustomVerifier})
+-			if e != nil {
+-				return nil, h, e
+-			}
+-			cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS13, tls.VersionTLS13
+-			// Make rotation effective by updating the store
+-			store.Set(cfg)
+-			return cfg, h, nil
+-		}, s.opts.Logger, s.opts.MaxBackoffDuration)
+-		if err != nil {
+-			return "", nil, nil, fmt.Errorf("%w: start rotation: %w", e5serrors.ErrTLSConfig, err)
+-		}
+-		closer = &rotationAwareCloser{provider: s.provider, rotationStop: stop}
+-	}
+-
+-	return addr, dyn, closer, nil
++	// The provider handles cleanup of sources
++	return addr, tlsCfg, s.provider, nil
+ }
+\ No newline at end of file
+diff --git a/e5s/internal/app/tls_builder.go b/e5s/internal/app/tls_builder.go
+deleted file mode 100644
+index fb97d4f..0000000
+--- a/e5s/internal/app/tls_builder.go
++++ /dev/null
+@@ -1,103 +0,0 @@
+-package app
+-
+-import (
+-	"crypto/sha256"
+-	"crypto/tls"
+-	"crypto/x509"
+-	"encoding/pem"
+-	"fmt"
+-	"time"
+-
+-	e5serrors "github.com/sufield/e5s/internal/errors"
+-	"github.com/sufield/e5s/internal/ports"
+-)
+-
+-type TLSBuilder interface {
+-	FromSVID(ports.SVID, TLSBuilderOptions) (*tls.Config, [32]byte, error)
+-}
+-
+-type TLSBuilderOptions struct {
+-	CustomVerifier func(rawCerts [][]byte, chains [][]*x509.Certificate) error
+-}
+-
+-type DefaultTLSBuilder struct{}
+-
+-func (DefaultTLSBuilder) FromSVID(svid ports.SVID, opts TLSBuilderOptions) (*tls.Config, [32]byte, error) {
+-	// timestamps
+-	now := time.Now()
+-	if svid.ExpiresAt != 0 && now.After(time.Unix(svid.ExpiresAt, 0)) {
+-		return nil, [32]byte{}, fmt.Errorf("%w: SVID expired", e5serrors.ErrInvalidCertificate)
+-	}
+-	if svid.NotBefore != 0 && now.Before(time.Unix(svid.NotBefore, 0)) {
+-		return nil, [32]byte{}, fmt.Errorf("%w: SVID not valid yet", e5serrors.ErrInvalidCertificate)
+-	}
+-
+-	// parse cert chain
+-	var chainDER [][]byte
+-	rest := svid.CertPEM
+-	for {
+-		block, r := pem.Decode(rest)
+-		if block == nil {
+-			break
+-		}
+-		if block.Type == "CERTIFICATE" {
+-			chainDER = append(chainDER, block.Bytes)
+-		}
+-		rest = r
+-	}
+-	if len(chainDER) == 0 {
+-		return nil, [32]byte{}, fmt.Errorf("%w: empty certs", e5serrors.ErrInvalidCertificate)
+-	}
+-
+-	// parse key (pkcs8, pkcs1, ec)
+-	keyBlock, _ := pem.Decode(svid.KeyPEM)
+-	if keyBlock == nil {
+-		return nil, [32]byte{}, fmt.Errorf("%w: key PEM empty", e5serrors.ErrInvalidPEM)
+-	}
+-	var priv any
+-	var err error
+-	if priv, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes); err != nil {
+-		if priv, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes); err != nil {
+-			if priv, err = x509.ParseECPrivateKey(keyBlock.Bytes); err != nil {
+-				return nil, [32]byte{}, fmt.Errorf("%w: parse key: %w", e5serrors.ErrParseKeyFailed, err)
+-			}
+-		}
+-	}
+-
+-	cert := tls.Certificate{Certificate: chainDER, PrivateKey: priv}
+-
+-	bundle := x509.NewCertPool()
+-	if !bundle.AppendCertsFromPEM(svid.BundlePEM) {
+-		return nil, [32]byte{}, fmt.Errorf("%w: empty bundle", e5serrors.ErrEmptyBundle)
+-	}
+-
+-	// verify chain early
+-	leaf, err := x509.ParseCertificate(chainDER[0])
+-	if err != nil {
+-		return nil, [32]byte{}, fmt.Errorf("%w: leaf parse: %w", e5serrors.ErrInvalidCertificate, err)
+-	}
+-	inter := x509.NewCertPool()
+-	for i := 1; i < len(chainDER); i++ {
+-		c, e := x509.ParseCertificate(chainDER[i])
+-		if e != nil {
+-			return nil, [32]byte{}, fmt.Errorf("%w: intermediate %d: %w", e5serrors.ErrInvalidCertificate, i, e)
+-		}
+-		inter.AddCert(c)
+-	}
+-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: bundle, Intermediates: inter}); err != nil {
+-		return nil, [32]byte{}, fmt.Errorf("%w: chain verify: %w", e5serrors.ErrInvalidCertificate, err)
+-	}
+-
+-	cfg := &tls.Config{
+-		Certificates: []tls.Certificate{cert},
+-		ClientAuth:   tls.RequireAndVerifyClientCert,
+-		ClientCAs:    bundle,
+-		// RootCAs is not needed for server-only configs
+-	}
+-	if opts.CustomVerifier != nil {
+-		cfg.VerifyPeerCertificate = opts.CustomVerifier
+-	}
+-
+-	hash := sha256.Sum256(svid.CertPEM)
+-	return cfg, hash, nil
+-}
+\ No newline at end of file
+diff --git a/e5s/internal/app/tlsstore.go b/e5s/internal/app/tlsstore.go
+deleted file mode 100644
+index 1c84d62..0000000
+--- a/e5s/internal/app/tlsstore.go
++++ /dev/null
+@@ -1,31 +0,0 @@
+-package app
+-
+-import (
+-	"crypto/tls"
+-	"sync/atomic"
+-)
+-
+-// TLSConfigStore provides atomic storage and retrieval of TLS configurations.
+-// It allows live rotation of certificates without restarting the server.
+-type TLSConfigStore struct {
+-	v atomic.Value // *tls.Config
+-}
+-
+-// Set atomically stores a new TLS configuration
+-func (s *TLSConfigStore) Set(cfg *tls.Config) {
+-	s.v.Store(cfg)
+-}
+-
+-// Get atomically retrieves the current TLS configuration
+-func (s *TLSConfigStore) Get() *tls.Config {
+-	if v := s.v.Load(); v != nil {
+-		return v.(*tls.Config)
+-	}
+-	return &tls.Config{}
+-}
+-
+-// GetConfigForClient implements the tls.Config.GetConfigForClient hook
+-// to dynamically provide the latest TLS configuration for each handshake
+-func (s *TLSConfigStore) GetConfigForClient(*tls.ClientHelloInfo) (*tls.Config, error) {
+-	return s.Get(), nil
+-}
+\ No newline at end of file
+diff --git a/e5s/internal/errors/errors.go b/e5s/internal/errors/errors.go
+index b2a664e..5a98b2d 100644
+--- a/e5s/internal/errors/errors.go
++++ b/e5s/internal/errors/errors.go
+@@ -107,9 +107,6 @@ var (
+ 	// ErrSourceClosed indicates that the X509Source has been closed and cannot be used.
+ 	ErrSourceClosed = errors.New("X509Source closed")
+ 
+-	// ErrRotationFailed indicates that SVID rotation monitoring or processing failed.
+-	ErrRotationFailed = errors.New("SVID rotation failed")
+-
+ 	// ErrHealthCheckFailed indicates that a health check operation failed.
+ 	ErrHealthCheckFailed = errors.New("health check failed")
+ 
+diff --git a/e5s/internal/ports/identity.go b/e5s/internal/ports/identity.go
+index 2bff725..9839b9e 100644
+--- a/e5s/internal/ports/identity.go
++++ b/e5s/internal/ports/identity.go
+@@ -5,6 +5,8 @@ import (
+ 	"fmt"
+ 	"time"
+ 
++	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
++	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+ 	errx "github.com/sufield/e5s/internal/errors"
+ )
+ 
+@@ -59,15 +61,15 @@ func (s SVID) TTLAt(t time.Time) time.Duration {
+ // TTL uses current time.
+ func (s SVID) TTL() time.Duration { return s.TTLAt(time.Now()) }
+ 
+-type SVIDUpdate struct {
+-	SVID *SVID
+-	Err  error
+-}
+-
+-// IdentityProvider is technology-agnostic.
++// IdentityProvider provides SVID and bundle sources for mTLS
++// Uses go-spiffe sources which handle certificate rotation automatically
+ type IdentityProvider interface {
++	// SVIDSource returns an x509svid.Source that auto-refreshes from Workload API
++	SVIDSource() x509svid.Source
++	// BundleSource returns an x509bundle.Source that auto-refreshes from Workload API
++	BundleSource() x509bundle.Source
++	// GetSVID is a convenience method for health checks and legacy compatibility
+ 	GetSVID(ctx context.Context, id WorkloadID) (SVID, error)
+-	WatchRotation(ctx context.Context, id WorkloadID) (<-chan SVIDUpdate, error)
+ 	Close() error
+ }
+ 
+diff --git a/e5s/internal/ports/identity_contract.go b/e5s/internal/ports/identity_contract.go
+index 04790a7..3aef63c 100644
+--- a/e5s/internal/ports/identity_contract.go
++++ b/e5s/internal/ports/identity_contract.go
+@@ -71,78 +71,6 @@ func ContractTest(t *testing.T, makeProvider func(t *testing.T) IdentityProvider
+ 		}
+ 	})
+ 
+-	t.Run("WatchRotation emits initial SVID", func(t *testing.T) {
+-		p := makeProvider(t)
+-		t.Cleanup(func() { _ = p.Close() })
+-
+-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+-		t.Cleanup(cancel)
+-
+-		ch, err := p.WatchRotation(ctx, WorkloadID(""))
+-		if err != nil {
+-			t.Fatalf("WatchRotation failed: %v", err)
+-		}
+-
+-		// Must receive the initial event.
+-		select {
+-		case upd := <-ch:
+-			if upd.Err != nil {
+-				t.Fatalf("initial update error: %v", upd.Err)
+-			}
+-			if upd.SVID == nil || len(upd.SVID.CertPEM) == 0 {
+-				t.Fatal("initial SVID missing or empty")
+-			}
+-			if time.Unix(upd.SVID.ExpiresAt, 0).Before(time.Now().Add(-1 * time.Second)) {
+-				t.Error("initial SVID already expired")
+-			}
+-		case <-time.After(5 * time.Second):
+-			t.Fatal("timeout waiting for initial SVID")
+-		}
+-
+-		// Rotation may or may not occur (provider-dependent); treat as optional.
+-		select {
+-		case upd := <-ch:
+-			if upd.Err != nil {
+-				t.Logf("rotation error (non-fatal for contract): %v", upd.Err)
+-			} else if upd.SVID != nil {
+-				t.Logf("received rotated SVID for workload: %s", upd.SVID.Workload.String())
+-			}
+-		case <-time.After(3 * time.Second):
+-			t.Log("no rotation in 3s (expected for SPIRE)")
+-		}
+-	})
+-
+-	t.Run("Context cancellation stops watching", func(t *testing.T) {
+-		p := makeProvider(t)
+-		t.Cleanup(func() { _ = p.Close() })
+-
+-		ctx, cancel := context.WithCancel(context.Background())
+-		ch, err := p.WatchRotation(ctx, WorkloadID(""))
+-		if err != nil {
+-			t.Fatalf("WatchRotation failed: %v", err)
+-		}
+-
+-		// Receive first event (SVID or error) to ensure watcher started.
+-		select {
+-		case <-ch:
+-		case <-time.After(5 * time.Second):
+-			t.Fatal("timeout waiting for initial event")
+-		}
+-
+-		// Cancel and ensure channel closes.
+-		cancel()
+-		done := make(chan struct{})
+-		go func() {
+-			for range ch { /* drain until closed */ }
+-			close(done)
+-		}()
+-
+-		select {
+-		case <-done:
+-		case <-time.After(2 * time.Second):
+-			t.Error("channel not closed after context cancellation")
+-		}
+-	})
+ 
+ 	t.Run("Provider Close is enforced", func(t *testing.T) {
+ 		p := makeProvider(t)
+@@ -155,9 +83,6 @@ func ContractTest(t *testing.T, makeProvider func(t *testing.T) IdentityProvider
+ 		if _, err := p.GetSVID(ctx, WorkloadID("")); !stderrs.Is(err, errx.ErrProviderClosed) {
+ 			t.Fatalf("GetSVID after Close: want ErrProviderClosed, got %v", err)
+ 		}
+-		if _, err := p.WatchRotation(ctx, WorkloadID("")); !stderrs.Is(err, errx.ErrProviderClosed) {
+-			t.Fatalf("WatchRotation after Close: want ErrProviderClosed, got %v", err)
+-		}
+ 	})
+ 
+ 	t.Run("Multiple GetSVID calls work", func(t *testing.T) {
+diff --git a/e5s/mtls/server.go b/e5s/mtls/server.go
+index e5e14ba..1cbd113 100644
+--- a/e5s/mtls/server.go
++++ b/e5s/mtls/server.go
+@@ -7,7 +7,6 @@ import (
+ 	"context"
+ 	"crypto/tls"
+ 	"io"
+-	"time"
+ 
+ 	"github.com/sufield/e5s/internal/adapters/outbound/yaml"
+ 	"github.com/sufield/e5s/internal/app"
+@@ -46,18 +45,14 @@ func ServerTLS(ctx context.Context, p Params) (*tls.Config, io.Closer, error) {
+ 	// Create logger for visibility
+ 	logger := NewSimpleLogger("")
+ 	
+-	// Create the server service with all modular components
++	// Create the server service with simplified approach
+ 	svc, err := app.NewServerService(
+ 		cfg,
+ 		provider,
+-		app.DefaultTLSBuilder{},
+ 		app.DefaultValidator{},
+-		app.DefaultRotation{},
+ 		app.DefaultHealth{},
+ 		app.ServerServiceOptions{
+-			EnableRotation:     true,
+-			MaxBackoffDuration: 5 * time.Minute,
+-			Logger:             logger,
++			Logger: logger,
+ 		},
+ 	)
+ 	if err != nil {
+diff --git a/e5s/version.go b/e5s/version.go
+index 5f16b95..b42e14c 100644
+--- a/e5s/version.go
++++ b/e5s/version.go
+@@ -6,7 +6,7 @@ import (
+ 	"sync"
+ )
+ 
+-const Version = "0.0.19"
++const Version = "0.0.20"
+ 
+ var (
+ 	versionLogged sync.Once
